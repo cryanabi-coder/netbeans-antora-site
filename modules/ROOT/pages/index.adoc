@@ -1,65 +1,666 @@
-////
-     Licensed to the Apache Software Foundation (ASF) under one
-     or more contributor license agreements.  See the NOTICE file
-     distributed with this work for additional information
-     regarding copyright ownership.  The ASF licenses this file
-     to you under the Apache License, Version 2.0 (the
-     "License"); you may not use this file except in compliance
-     with the License.  You may obtain a copy of the License at
+// artbuddy_raylib.cpp
+// ArtBuddy 3000 — Museum Mystery Mansion Edition with Raylib sprites
+// Simple drawn sprites (no external images) — kid-friendly UI and mini-games
 
-       http://www.apache.org/licenses/LICENSE-2.0
+#include "raylib.h"
+#include <string>
+#include <vector>
+#include <cstdlib>
+#include <ctime>
+#include <algorithm>
 
-     Unless required by applicable law or agreed to in writing,
-     software distributed under the License is distributed on an
-     "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-     KIND, either express or implied.  See the License for the
-     specific language governing permissions and limitations
-     under the License.
-////
-= Welcome to Apache NetBeans
-:page-layout: page_front
-:page-tags: main
-:jbake-status: published
-:keywords: Apache NetBeans
-:icons: font
-:description: Apache NetBeans
-:note: The 'hero' tags below enable the 'hero' area in the page.gsp template
-:hero.top: Version 11.1
-:hero.title: Apache NetBeans
-:hero.subtitle: Fits the Pieces Together
+using std::string;
+using std::vector;
 
-// See https://fontawesome.com/icons?d=gallery for more icons (not all of those are available, though)
+// Window
+const int SCREEN_W = 1024;
+const int SCREEN_H = 768;
 
-[.cards]
-****
+// Player / ArtBuddy sprite
+struct Sprite {
+    Vector2 pos;
+    Vector2 size;
+    Color bodyColor;
+    float speed;
+    int faceState; // 0 = normal, 1 = excited, 2 = proud
+    float faceAnimTimer;
+};
 
-// Add cards as you see fit below. Try not to repeat consecutive colors.
+enum Mode { MODE_INDIVIDUAL = 1, MODE_CLASS = 2 };
 
-[.card.blue]
-.icon:edit[] Fast & Smart Editing
-Apache NetBeans is much more than a text editor. It highlights source code xref:tutorial::kb/docs/java/editor-codereference.adoc[syntactically and semantically], lets you easily xref:tutorial::kb/docs/java/editor-inspect-transform.adoc[refactor code], with a range of handy and powerful tools.
+enum RoomID { GALLERY = 0, DANCE_HALL = 1, SOUND_LAB = 2, THEATRE = 3, CURATOR = 4 };
 
-[.card.green]
-.icon:wrench[] Java, JavaScript, PHP, HTML5, CSS, and More
-Apache NetBeans provides editors, wizards, and templates to help you create applications in xref:tutorial::kb/docs/java/index.adoc[Java], xref:tutorial::kb/docs/php/index.adoc[PHP] and many other languages.
+struct Room {
+    Rectangle rect;
+    string name;
+    RoomID id;
+    Color color;
+};
 
-[.card.magenta]
-.icon:download[] Cross Platform
-Apache NetBeans can be xref:download/index.adoc[installed] on all operating systems that support Java, i.e, Windows, Linux, Mac OSX and BSD. Write Once, Run Anywhere, applies to NetBeans too. 
+// Global game state
+int creativityPoints = 0; // 0 - 100
+int cluesFound = 0;
+bool hasMap = false;
+bool mysterySolved = false;
+bool showMapPieceAnim = false;
 
-[.card.green]
-.icon:users[] Join us
-Subscribe to our xref:community/mailing-lists.adoc[mailing lists], or follow us in link:https://twitter.com/netbeans[Twitter], link:https://tinyurl.com/netbeans-slack-signup/[Slack], link:https://www.facebook.com/NetBeans[FaceBook] or link:https://www.youtube.com/user/netbeansvideos[YouTube].
+int currentMode = MODE_INDIVIDUAL;
 
-[.card.magenta]
-.icon:arrow-right[] Participate
-See how you can participate by xref:participate/submit-pr.adoc[submitting pull requests], xref:participate/report-issue.adoc[filing issues], or joining the link:https://cwiki.apache.org/confluence/display/NETBEANS/NetCAT[NetCAT] program.
+// UI state
+bool showRoomUI = false;
+RoomID activeRoom;
+bool showMiniGame = false;
+int currentMiniGame = 0; // 0 none, 1 dance, 2 music, 3 theatre, 4 art
 
-[.card.blue]
-.icon:book[] Learn
-We are currently reviewing the tutorials. See how you can xref:tutorial::kb/docs/contributing.adoc[help us] review the xref:tutorial::kb/docs/java/index.adoc[Java] and xref:tutorial::kb/docs/php/index.adoc[PHP] tutorials.
+// Mini-game states
+int danceStepIndex = 0;
+vector<int> danceSequence;
+float danceTimer = 0;
+float danceInterval = 1.0f;
+bool danceShowSequence = true;
 
+vector<int> musicPattern;
+int musicInputIndex = 0;
 
-****
+int theatreChoice = -1;
+vector<string> theatreFeelings = {"happy","sad","surprised","scared","brave"};
 
+vector<string> positiveReactions = {
+    "✨ Wow! That idea sparkles!",
+    "Ding! You're a creativity superstar!",
+    "Whoosh! Love that thinking!",
+    "🎉 Nice! Keep those ideas coming!",
+    "💡 Bright idea! Great job!",
+    "🌟 You made a creative leap!"
+};
 
+// Helper functions
+string RandomReaction() {
+    return positiveReactions[GetRandomValue(0, (int)positiveReactions.size()-1)];
+}
+
+void AddCreativity(int amount) {
+    creativityPoints += amount;
+    if (creativityPoints > 100) creativityPoints = 100;
+}
+
+void ResetMiniGamesState() {
+    danceStepIndex = 0;
+    danceSequence.clear();
+    danceTimer = 0;
+    danceShowSequence = true;
+
+    musicPattern.clear();
+    musicInputIndex = 0;
+
+    theatreChoice = -1;
+}
+
+// Draw a simple ArtBuddy robot sprite using shapes
+void DrawArtBuddy(const Sprite &s) {
+    Rectangle body = { s.pos.x - s.size.x/2, s.pos.y - s.size.y/2, s.size.x, s.size.y };
+    DrawRectangleRounded(body, 0.25f, 8, s.bodyColor);
+    // face
+    Color eyeColor = (s.faceState==1) ? GOLD : BLACK;
+    DrawCircle((int)(s.pos.x - s.size.x*0.18f), (int)(s.pos.y - s.size.y*0.12f), 6, eyeColor);
+    DrawCircle((int)(s.pos.x + s.size.x*0.18f), (int)(s.pos.y - s.size.y*0.12f), 6, eyeColor);
+    if (s.faceState == 0) {
+        DrawRectangle((int)(s.pos.x - 10), (int)(s.pos.y + 6), 20, 3, BLACK); // neutral mouth
+    } else if (s.faceState == 1) {
+        // smile
+        DrawPoly((Vector2){s.pos.x, s.pos.y+8}, 6, 10, 0, GOLD); // little sparkle smile
+    } else if (s.faceState == 2) {
+        DrawRectangle((int)(s.pos.x - 12), (int)(s.pos.y + 6), 24, 5, DARKBLUE); // proud wide smile
+    }
+    // antenna
+    DrawLine((int)s.pos.x, (int)(s.pos.y - s.size.y/2), (int)(s.pos.x), (int)(s.pos.y - s.size.y/2) - 12, GRAY);
+    DrawCircle((int)s.pos.x, (int)(s.pos.y - s.size.y/2) - 16, 6, RED);
+}
+
+// Draw the creativity meter on HUD
+void DrawCreativityMeter(int x, int y) {
+    DrawText("Creativity:", x, y - 24, 18, BLACK);
+    DrawRectangle(x, y, 200, 20, LIGHTGRAY);
+    int w = (int)(200 * (creativityPoints / 100.0f));
+    DrawRectangle(x, y, w, 20, LIME);
+    DrawRectangleLines(x, y, 200, 20, BLACK);
+    char buf[32];
+    sprintf(buf, "%d%%", creativityPoints);
+    DrawText(buf, x + 85, y + 24, 16, DARKGRAY);
+}
+
+// Draw HUD: mode, reactions, clues
+void DrawHUD(int cluesFound) {
+    string modeText = (currentMode == MODE_CLASS) ? "CLASS MODE" : "INDIVIDUAL MODE";
+    DrawText(modeText.c_str(), 16, 16, 20, DARKBLUE);
+
+    string clueText = "Clues: " + std::to_string(cluesFound) + "/3";
+    DrawText(clueText.c_str(), 16, 44, 18, MAROON);
+
+    DrawText("Press M to open mansion map | Space to interact", 240, 16, 16, GRAY);
+}
+
+// Simple button
+bool ButtonSimple(Rectangle r, const char* label) {
+    Vector2 m = GetMousePosition();
+    bool hover = CheckCollisionPointRec(m, r);
+    Color col = hover ? LIGHTGRAY : RAYWHITE;
+    DrawRectangleRec(r, col);
+    DrawRectangleLinesEx(r, 2, DARKGRAY);
+    int tx = (int)(r.x + (r.width - MeasureText(label, 18)) / 2);
+    int ty = (int)(r.y + (r.height - 18) / 2);
+    DrawText(label, tx, ty, 18, BLACK);
+    if (hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) return true;
+    return false;
+}
+
+// Mini-game: Dance (press arrow keys in sequence)
+// Sequence is shown, then player repeats
+void StartDanceMiniGame() {
+    ResetMiniGamesState();
+    danceSequence.clear();
+    // random sequence length 3-5
+    int len = GetRandomValue(3,5);
+    for (int i=0;i<len;i++) danceSequence.push_back(GetRandomValue(0,3)); // 0=up,1=right,2=down,3=left
+    danceShowSequence = true;
+    danceTimer = 0;
+    showMiniGame = true;
+    currentMiniGame = 1;
+}
+
+void UpdateDanceMiniGame(Sprite &player) {
+    const float showTime = 0.8f;
+    const float gapTime = 0.3f;
+    if (danceShowSequence) {
+        danceTimer += GetFrameTime();
+        int idx = (int)(danceTimer / (showTime + gapTime));
+        if (idx >= (int)danceSequence.size()) {
+            danceShowSequence = false;
+            danceTimer = 0;
+            danceStepIndex = 0; // now waiting for player input
+        }
+    } else {
+        // accept arrow key input for sequence
+        int input = -1;
+        if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) input = 0;
+        if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D)) input = 1;
+        if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) input = 2;
+        if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A)) input = 3;
+
+        if (input != -1) {
+            // check
+            if (input == danceSequence[danceStepIndex]) {
+                // correct
+                danceStepIndex++;
+                AddCreativity(5);
+                player.faceState = 1;
+                player.faceAnimTimer = 0.4f;
+            } else {
+                // incorrect - small penalty, encourage retry
+                AddCreativity(2);
+                player.faceState = 2;
+                player.faceAnimTimer = 0.6f;
+            }
+            if (danceStepIndex >= (int)danceSequence.size()) {
+                // success
+                showMiniGame = false;
+                currentMiniGame = 0;
+                cluesFound++;
+                if (cluesFound >= 3 && !hasMap) { hasMap = true; showMapPieceAnim = true; }
+            }
+        }
+    }
+}
+
+void DrawDanceMiniGame() {
+    DrawRectangle(150, 120, 724, 480, Fade(RAYWHITE, 0.95f));
+    DrawRectangleLines(150, 120, 724, 480, DARKPURPLE);
+    DrawText("Mini-Game: Dance Move Mixer", 180, 132, 24, BLACK);
+    if (danceShowSequence) {
+        // show current step highlight
+        float showTime = 0.8f;
+        float gapTime = 0.3f;
+        float t = danceTimer;
+        int idx = (int)(t / (showTime + gapTime));
+        string steps = "Watch the sequence!";
+        DrawText(steps.c_str(), 180, 170, 20, DARKGRAY);
+        for (int i=0;i<(int)danceSequence.size();i++) {
+            int x = 220 + i*80;
+            Color c = (i==idx && (t - idx*(showTime+gapTime)) < showTime) ? LIME : LIGHTGRAY;
+            DrawCircle(x, 250, 30, c);
+            const char* arrow = (danceSequence[i]==0)?"^":(danceSequence[i]==1)?">":(danceSequence[i]==2)?"v":"<";
+            DrawText(arrow, x-8, 240, 28, BLACK);
+        }
+    } else {
+        DrawText("Now it's your turn! Press the arrows to repeat the moves.", 180, 170, 20, DARKGRAY);
+        DrawText("Use arrow keys or WASD.", 180, 200, 18, MAROON);
+    }
+    DrawText("Hint: big moves look strong, small moves look sneaky.", 180, 320, 18, DARKGRAY);
+}
+
+// Mini-game: Music pattern (type a pattern using C and T for CLAP/TAP)
+void StartMusicMiniGame() {
+    ResetMiniGamesState();
+    int len = GetRandomValue(3,5);
+    for (int i=0;i<len;i++) musicPattern.push_back(GetRandomValue(0,1)); // 0=CLAP,1=TAP
+    showMiniGame = true;
+    currentMiniGame = 2;
+}
+
+void UpdateMusicMiniGame(Sprite &player) {
+    // Accept C or T keys
+    if (IsKeyPressed(KEY_C)) {
+        if (musicInputIndex < (int)musicPattern.size() && musicPattern[musicInputIndex] == 0) {
+            musicInputIndex++; AddCreativity(5); player.faceState = 1; player.faceAnimTimer = 0.4f;
+        } else { AddCreativity(2); player.faceState = 2; player.faceAnimTimer = 0.6f; }
+    }
+    if (IsKeyPressed(KEY_T)) {
+        if (musicInputIndex < (int)musicPattern.size() && musicPattern[musicInputIndex] == 1) {
+            musicInputIndex++; AddCreativity(5); player.faceState = 1; player.faceAnimTimer = 0.4f;
+        } else { AddCreativity(2); player.faceState = 2; player.faceAnimTimer = 0.6f; }
+    }
+
+    if (musicInputIndex >= (int)musicPattern.size()) {
+        showMiniGame = false; currentMiniGame = 0; cluesFound++;
+        if (cluesFound >= 3 && !hasMap) { hasMap = true; showMapPieceAnim = true; }
+    }
+}
+
+void DrawMusicMiniGame() {
+    DrawRectangle(150, 120, 724, 480, Fade(RAYWHITE, 0.95f));
+    DrawRectangleLines(150, 120, 724, 480, DARKPURPLE);
+    DrawText("Mini-Game: Music Pattern Maker", 180, 132, 24, BLACK);
+    DrawText("Listen to the pattern and press C for CLAP and T for TAP to repeat it.", 180, 170, 18, DARKGRAY);
+    // show the pattern for a moment visually
+    for (int i=0;i<(int)musicPattern.size();i++) {
+        int x = 220 + i*80;
+        Color c = musicPattern[i]==0 ? LIGHTBLUE : ORANGE;
+        DrawRectangle(x-30, 240-30, 60, 60, c);
+        DrawText(musicPattern[i]==0 ? "CLAP":"TAP", x-26, 245-14, 14, BLACK);
+    }
+}
+
+// Mini-game: Theatre feeling (choose a feeling button)
+void StartTheatreMiniGame() {
+    ResetMiniGamesState();
+    currentMiniGame = 3;
+    showMiniGame = true;
+}
+
+void UpdateTheatreMiniGame(Sprite &player) {
+    // accept number 1..5 keys
+    if (IsKeyPressed(KEY_ONE)) theatreChoice = 0;
+    if (IsKeyPressed(KEY_TWO)) theatreChoice = 1;
+    if (IsKeyPressed(KEY_THREE)) theatreChoice = 2;
+    if (IsKeyPressed(KEY_FOUR)) theatreChoice = 3;
+    if (IsKeyPressed(KEY_FIVE)) theatreChoice = 4;
+
+    if (theatreChoice != -1) {
+        AddCreativity(12);
+        randomReaction();
+        showMiniGame = false;
+        currentMiniGame = 0;
+        cluesFound++;
+        if (cluesFound >= 3 && !hasMap) { hasMap = true; showMapPieceAnim = true; }
+    }
+}
+
+void DrawTheatreMiniGame() {
+    DrawRectangle(150, 120, 724, 480, Fade(RAYWHITE, 0.95f));
+    DrawRectangleLines(150, 120, 724, 480, DARKPURPLE);
+    DrawText("Mini-Game: Theatre Feeling Guess", 180, 132, 24, BLACK);
+    DrawText("Choose a feeling to show on stage (press keys 1-5):", 180, 170, 18, DARKGRAY);
+
+    for (int i=0;i<(int)theatreFeelings.size();i++) {
+        string label = std::to_string(i+1) + ". " + theatreFeelings[i];
+        DrawText(label.c_str(), 220, 210 + i*36, 20, DARKBLUE);
+    }
+}
+
+// Mini-game: Art detail hunt (click to place three details)
+void StartArtMiniGame() {
+    ResetMiniGamesState();
+    currentMiniGame = 4;
+    showMiniGame = true;
+}
+
+vector<Vector2> artDetailsPositions;
+void UpdateArtMiniGame(Sprite &player) {
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        Vector2 m = GetMousePosition();
+        if (m.x > 160 && m.x < 880 && m.y > 140 && m.y < 560) {
+            if ((int)artDetailsPositions.size() < 3) {
+                artDetailsPositions.push_back(m);
+                AddCreativity(8);
+                player.faceState = 1; player.faceAnimTimer = 0.4f;
+            }
+            if ((int)artDetailsPositions.size() >= 3) {
+                showMiniGame = false; currentMiniGame = 0; cluesFound++;
+                if (cluesFound >= 3 && !hasMap) { hasMap = true; showMapPieceAnim = true; }
+            }
+        }
+    }
+}
+
+void DrawArtMiniGame() {
+    DrawRectangle(150, 120, 724, 480, Fade(RAYWHITE, 0.95f));
+    DrawRectangleLines(150, 120, 724, 480, DARKPURPLE);
+    DrawText("Mini-Game: Art Detail Hunt", 180, 132, 24, BLACK);
+    DrawText("Click in the picture area to add 3 details (trees, sun, bench...).", 180, 170, 18, DARKGRAY);
+    DrawRectangle(160, 140, 720, 420, LIGHTGRAY);
+    DrawRectangleLines(160, 140, 720, 420, DARKGRAY);
+    // draw placed details
+    for (size_t i=0;i<artDetailsPositions.size();i++) {
+        DrawCircleV(artDetailsPositions[i], 8, RED);
+    }
+}
+
+// Draw room UI with question and hint
+void DrawRoomUI(const Room &room) {
+    DrawRectangle(60, 60, SCREEN_W - 120, SCREEN_H - 120, Fade(RAYWHITE, 0.97f));
+    DrawRectangleLines(60, 60, SCREEN_W - 120, SCREEN_H - 120, DARKBLUE);
+    DrawText(room.name.c_str(), 100, 80, 28, BLACK);
+
+    // question and hint (child-friendly)
+    string question;
+    string hint;
+    if (room.id == GALLERY) {
+        question = "Look at a painting. What colors help show a sunny day?";
+        hint = "Think of bright warm colors like yellow, orange, and light blue.";
+    } else if (room.id == DANCE_HALL) {
+        question = "If you make a dance, would you use big or small steps? Why?";
+        hint = "Big steps can feel strong. Small steps can feel secret or quiet.";
+    } else if (room.id == SOUND_LAB) {
+        question = "If you want soft music, what sounds would you pick?";
+        hint = "Try soft clapping, low hums, or a slow tapping.";
+    } else if (room.id == THEATRE) {
+        question = "How could an actor show they are surprised?";
+        hint = "Try a big face, a quick step back, or a short shout.";
+    } else {
+        question = "You found the Curator's desk. A riddle sits on the table.";
+        hint = "Think about what helps us see stories on stage or in pictures.";
+    }
+
+    DrawText(question.c_str(), 100, 130, 22, DARKGRAY);
+    DrawText(("Hint: " + hint).c_str(), 100, 170, 20, DARKGRAY);
+
+    // Buttons to start mini-games
+    Rectangle g1 = {100, 220, 220, 48};
+    Rectangle g2 = {340, 220, 220, 48};
+    Rectangle g3 = {580, 220, 220, 48};
+    Rectangle g4 = {820, 220, 160, 48};
+
+    if (ButtonSimple(g1, "Try Mini-Game: Dance")) {
+        StartDanceMiniGame();
+    }
+    if (ButtonSimple(g2, "Try Mini-Game: Music")) {
+        StartMusicMiniGame();
+    }
+    if (ButtonSimple(g3, "Try Mini-Game: Theatre")) {
+        StartTheatreMiniGame();
+    }
+    if (ButtonSimple(g4, "Try Mini-Game: Art")) {
+        artDetailsPositions.clear();
+        StartArtMiniGame();
+    }
+
+    // Close button
+    Rectangle closeBtn = {SCREEN_W - 180, SCREEN_H - 110, 140, 40};
+    if (ButtonSimple(closeBtn, "Close Room")) {
+        showRoomUI = false;
+        ResetMiniGamesState();
+    }
+
+    // If Curator room and hasMap -> show riddle option
+    if (room.id == CURATOR && hasMap) {
+        DrawText("You found the map piece! Try solving the Curator's riddle.", 100, 300, 20, MAROON);
+        Rectangle riddleBtn = {100, 340, 300, 44};
+        if (ButtonSimple(riddleBtn, "Try the Curator's Riddle")) {
+            // show a simple riddle dialog (we'll handle in main)
+            // we set a flag by making currentMiniGame = 5
+            currentMiniGame = 5;
+        }
+    }
+}
+
+// Create mansion rooms
+vector<Room> CreateRooms() {
+    vector<Room> rooms;
+    rooms.push_back({{80, 120, 240, 200}, "The Gallery of Colors", GALLERY, SKYBLUE});
+    rooms.push_back({{360, 120, 240, 200}, "The Hall of Dancing Shadows", DANCE_HALL, LIGHTGRAY});
+    rooms.push_back({{640, 120, 240, 200}, "The Secret Sound Lab", SOUND_LAB, BEIGE});
+    rooms.push_back({{200, 360, 240, 200}, "The Theatre of Whispers", THEATRE, PURPLE});
+    rooms.push_back({{520, 360, 360, 200}, "The Curator's Office", CURATOR, GOLD});
+    return rooms;
+}
+
+int main() {
+    InitWindow(SCREEN_W, SCREEN_H, "ArtBuddy 3000 — Museum Mystery Mansion (Raylib)");
+    SetTargetFPS(60);
+    srand(time(NULL));
+
+    // Setup sprite
+    Sprite player;
+    player.pos = { 120, 200 };
+    player.size = { 64, 80 };
+    player.bodyColor = SKYBLUE;
+    player.speed = 220.0f;
+    player.faceState = 0;
+    player.faceAnimTimer = 0;
+
+    vector<Room> rooms = CreateRooms();
+
+    // Start menu to choose mode
+    bool showStartMenu = true;
+    while (!WindowShouldClose() && showStartMenu) {
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
+        DrawText("Welcome to ArtBuddy 3000 — Museum Mystery Mansion!", 80, 80, 28, DARKBLUE);
+        DrawText("Choose mode:", 80, 160, 22, BLACK);
+        Rectangle r1 = { 80, 210, 340, 60 };
+        Rectangle r2 = { 460, 210, 340, 60 };
+        if (ButtonSimple(r1, "1. Individual Mode (one student)")) {
+            currentMode = MODE_INDIVIDUAL;
+            showStartMenu = false;
+        }
+        if (ButtonSimple(r2, "2. Class Mode (teacher-led)")) {
+            currentMode = MODE_CLASS;
+            showStartMenu = false;
+        }
+        DrawText("Use arrow keys or WASD to move ArtBuddy. Press M to open map.", 80, 360, 18, GRAY);
+        DrawText("Interact with rooms to play mini-games and find clues!", 80, 390, 18, GRAY);
+        EndDrawing();
+
+        // allow window-close during menu
+        if (WindowShouldClose()) break;
+    }
+
+    // Main loop
+    bool showMap = true;
+    string lastReaction = "";
+
+    while (!WindowShouldClose()) {
+
+        float dt = GetFrameTime();
+
+        // Update player movement (only when not in modal UI like room UI or mini-game)
+        if (!showRoomUI && !showMiniGame) {
+            Vector2 dir = {0,0};
+            if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) dir.x += 1;
+            if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) dir.x -= 1;
+            if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) dir.y += 1;
+            if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) dir.y -= 1;
+            if (dir.x != 0 || dir.y != 0) {
+                float len = sqrtf(dir.x*dir.x + dir.y*dir.y);
+                dir.x /= len; dir.y /= len;
+                player.pos.x += dir.x * player.speed * dt;
+                player.pos.y += dir.y * player.speed * dt;
+            }
+        }
+
+        // Update robot face animation timer
+        if (player.faceAnimTimer > 0) {
+            player.faceAnimTimer -= dt;
+            if (player.faceAnimTimer <= 0) player.faceState = 0;
+        }
+
+        // Open map toggle
+        if (IsKeyPressed(KEY_M)) showMap = !showMap;
+
+        // Interaction: Space to open room UI when near a room
+        if (IsKeyPressed(KEY_SPACE) && !showMiniGame) {
+            // check near any room center
+            for (const Room &r: rooms) {
+                Vector2 center = {r.rect.x + r.rect.width/2, r.rect.y + r.rect.height/2};
+                float dist = Vector2Distance(player.pos, center);
+                if (dist < 120) {
+                    // open room UI
+                    showRoomUI = true;
+                    activeRoom = r.id;
+                    ResetMiniGamesState();
+                    break;
+                }
+            }
+        }
+
+        // If room UI open, check mouse/keyboard actions for mini-games will be handled by UI buttons
+        // Update mini-games when active
+        if (showMiniGame) {
+            if (currentMiniGame == 1) UpdateDanceMiniGame(player);
+            if (currentMiniGame == 2) UpdateMusicMiniGame(player);
+            if (currentMiniGame == 3) UpdateTheatreMiniGame(player);
+            if (currentMiniGame == 4) UpdateArtMiniGame(player);
+            if (currentMiniGame == 5) {
+                // Curator riddle: pressing ENTER opens prompt in class mode or single input in individual
+                if (currentMode == MODE_INDIVIDUAL) {
+                    // For simplicity in this demo, treat Enter as auto-solve (in a real app you'd show text input)
+                    if (IsKeyPressed(KEY_ENTER)) {
+                        // small chance to "solve" simulate typing
+                        mysterySolved = true;
+                        AddCreativity(30);
+                        showMiniGame = false; currentMiniGame = 0;
+                    }
+                } else {
+                    // class mode: teacher decides
+                    if (IsKeyPressed(KEY_ENTER)) {
+                        mysterySolved = true;
+                        AddCreativity(20);
+                        showMiniGame = false; currentMiniGame = 0;
+                    }
+                }
+            }
+        }
+
+        // If map piece anim active, show short timer then hide
+        if (showMapPieceAnim) {
+            // simply show for some frames by toggling false after some time
+            static float mapAnimTimer = 0;
+            mapAnimTimer += dt;
+            if (mapAnimTimer > 2.0f) {
+                showMapPieceAnim = false;
+                mapAnimTimer = 0;
+            }
+        }
+
+        // render
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
+
+        // Draw museum floor / rooms
+        DrawText("Museum Mystery Mansion Map (walk to a room and press SPACE)", 16, 8, 18, DARKGRAY);
+        for (const Room &r : rooms) {
+            DrawRectangleRec(r.rect, r.color);
+            DrawRectangleLines((int)r.rect.x, (int)r.rect.y, (int)r.rect.width, (int)r.rect.height, BLACK);
+            DrawText(r.name.c_str(), (int)r.rect.x + 8, (int)r.rect.y + 8, 18, BLACK);
+        }
+
+        // Draw player sprite
+        DrawArtBuddy(player);
+
+        // Draw little sprite shadow
+        DrawEllipse((int)player.pos.x, (int)(player.pos.y + player.size.y/2 + 6), 28, 10, Fade(BLACK, 0.15f));
+
+        // Draw HUD
+        DrawHUD(cluesFound);
+        DrawCreativityMeter(SCREEN_W - 260, 16);
+
+        // Show map toggle info
+        if (showMap) {
+            // highlight room rectangles (already drawn)
+            DrawText("Press SPACE near a room to explore it!", 16, SCREEN_H - 40, 18, DARKGRAY);
+        }
+
+        // If room UI is open draw overlay
+        if (showRoomUI) {
+            // find active room details
+            Room room = rooms[(int)activeRoom];
+            DrawRoomUI(room);
+
+            // If mini-game active draw it on top
+            if (showMiniGame) {
+                if (currentMiniGame == 1) DrawDanceMiniGame();
+                else if (currentMiniGame == 2) DrawMusicMiniGame();
+                else if (currentMiniGame == 3) DrawTheatreMiniGame();
+                else if (currentMiniGame == 4) DrawArtMiniGame();
+                else if (currentMiniGame == 5) {
+                    DrawRectangle(150, 120, 724, 480, Fade(RAYWHITE, 0.95f));
+                    DrawRectangleLines(150, 120, 724, 480, DARKPURPLE);
+                    DrawText("Curator's Riddle", 180, 132, 28, BLACK);
+                    DrawText("Riddle: 'I help stories be seen. I can be bright, dark, or clean. What am I?'", 180, 180, 20, DARKGRAY);
+                    DrawText("Press ENTER to try an answer (teacher can guide students).", 180, 220, 18, MAROON);
+                }
+            }
+        }
+
+        // Show reaction text occasionally
+        if (IsKeyPressed(KEY_R)) {
+            lastReaction = RandomReaction();
+        }
+        static float reactTimer = 0;
+        if (!lastReaction.empty()) {
+            reactTimer += GetFrameTime();
+            DrawText(lastReaction.c_str(), 16, SCREEN_H - 80, 20, DARKGREEN);
+            if (reactTimer > 3.0f) { lastReaction = ""; reactTimer = 0; }
+        }
+
+        // Show map piece animation or message when obtained
+        if (showMapPieceAnim || hasMap) {
+            DrawText("You found a map piece!", SCREEN_W/2 - 120, SCREEN_H - 80, 20, DARKORANGE);
+        }
+
+        // If mystery solved show celebration
+        if (mysterySolved) {
+            DrawRectangle(0, 0, SCREEN_W, SCREEN_H, Fade(GOLD, 0.12f));
+            DrawText("🎉 You solved the museum mystery! 🎉", SCREEN_W/2 - 260, SCREEN_H/2 - 20, 36, MAROON);
+        }
+
+        EndDrawing();
+
+        // After draw: if mysterySolved, reset after a delay (celebration)
+        static float celebrateTimer = 0;
+        if (mysterySolved) {
+            celebrateTimer += dt;
+            if (celebrateTimer > 4.0f) {
+                mysterySolved = false;
+                celebrateTimer = 0;
+                // reset clues for continued play
+                cluesFound = 0;
+                hasMap = false;
+                AddCreativity(10); // small reward
+            }
+        }
+
+        // If mini-game was closed and clues found increased, show random reaction text
+        // (we simulate this by reacting whenever the creativity increased this frame - already happens on AddCreativity calls)
+        // We'll also set lastReaction for immediate feedback
+        // (To avoid too frequent text, only set when a new clue is found)
+        static int prevClues = 0;
+        if (cluesFound > prevClues) {
+            lastReaction = RandomReaction();
+            prevClues = cluesFound;
+        }
+    }
+
+    CloseWindow();
+    return 0;
+}
